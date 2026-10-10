@@ -1,0 +1,23 @@
+# 密钥，绝对不能提交
+# 注意 .env.* 这条是防「不小心存成 .env.txt」的情况，
+# 否则记事本会给你加个 .txt 后缀，那个文件 .gitignore 拦不住，key 就泄露了。
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# 数据
+data/
+*.csv
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store

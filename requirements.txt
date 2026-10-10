@@ -1,0 +1,5 @@
+streamlit>=1.36
+openai>=1.40
+pillow>=10.2
+pandas>=2.1
+python-dotenv>=1.0
