@@ -13,18 +13,23 @@ import sys
 import types
 from pathlib import Path
 
-# --- 用一个假的 openai 顶掉真依赖，这样没装 openai 也能测解析逻辑 ---
+# --- 用假的 openai / httpx 顶掉真依赖，这样不装这两个包也能测解析逻辑 ---
+class _FakeError(Exception):
+    """占位异常，只要能被 except 捕获就够了。"""
+
+
 _stub = types.ModuleType("openai")
-
-
-class _FakeOpenAI:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-
-_stub.OpenAI = _FakeOpenAI
+_stub.OpenAI = type("OpenAI", (), {"__init__": lambda self, **kw: setattr(self, "kwargs", kw)})
+_stub.APIConnectionError = type("APIConnectionError", (_FakeError,), {})
+_stub.APITimeoutError = type("APITimeoutError", (_FakeError,), {})
+_stub.RateLimitError = type("RateLimitError", (_FakeError,), {})
 sys.modules.setdefault("openai", _stub)
-# -------------------------------------------------------------------
+
+_httpx = types.ModuleType("httpx")
+_httpx.TransportError = type("TransportError", (_FakeError,), {})
+_httpx.Client = type("Client", (), {"__init__": lambda self, **kw: setattr(self, "kwargs", kw)})
+sys.modules.setdefault("httpx", _httpx)
+# -------------------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

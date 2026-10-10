@@ -101,11 +101,17 @@ daily-diet/
 ├── app.py                          # Streamlit 界面：上传、展示、记录
 ├── analyzer.py                     # 核心逻辑：压缩图片 → 调模型 → 解析 JSON
 ├── test_analyzer.py                # 单元测试（不需要联网、不需要 API Key）
+├── set_key.py                      # 安全更新 .env 里的 key（带格式校验）
+├── check_api.py                    # 诊断：配置 + 鉴权 + 实际调用一次模型
+├── check_network.py                # 诊断：代理配置 → TLS 握手 → 请求分层测试
 ├── requirements.txt
 ├── .env.example                    # 配置模板（真正的 .env 不提交）
 ├── .gitignore                      # 挡住 .env，防止 key 泄露
 ├── .streamlit/
 │   └── secrets.toml.example        # 云端部署用的配置模板
+├── docs/
+│   └── demo.png                    # README 演示截图
+├── start.bat                       # 双击启动（Windows）
 └── README.md
 ```
 
@@ -127,6 +133,22 @@ python test_analyzer.py
 - **模型返回的不是干净 JSON**：它有时候会用 markdown 代码块包起来，有时候前面还加一句"好的，我来分析"。所以写了 `_extract_json()` 做容错，把代码块和多余文字剥掉再解析。
 - **合计不用模型给的**：一开始直接用模型返回的 total，发现有几次和明细对不上。后来改成自己按明细重算合计，保证数据一致。
 - **字符串数字——这是测试抓出来的 bug**：我原本以为模型只会返回 `232` 这种数字，写了 `float(value)` 就完事。结果写测试的时候顺手测了一下 `"约560"`，直接变成 0，一整道菜的热量就凭空消失了。改成先用正则从字符串里抠出第一个数字，`"约560"`、`"560 kcal"`、`"≈18.5"` 都能正确处理。**如果我当时没写这个测试，这个 bug 大概会一直留到线上，而且很难发现——因为页面只会显示一个偏低的数字，不会报错。**
+- **最花时间的一个 bug：`Connection error.`**。上线后某次分析突然报连接失败，但 key 和服务都没问题。我的排查过程是**分层往下剥**：
+
+  1. **DNS 能不能解析** → ✓ `dashscope.aliyuncs.com` → `8.140.217.18`
+  2. **TCP 443 能不能连** → ✓ 能连
+  3. **纯 TLS 握手**（绕过代理） → ✓ 成功，TLSv1.3
+  4. **带 key 请求，显式禁用代理** → **✓ HTTP 200**，请求完全正常
+  5. **带 key 请求，走系统代理** → ✗ `UNEXPECTED_EOF_WHILE_READING`
+  6. **不带 key，走系统代理** → ✗ `ConnectionResetError`
+
+  **第 4 步和第 5 步的对比就是答案**：请求本身一点问题都没有，是**系统代理**把连接掐断了。
+
+  根因是 `httpx`（openai 库底层）**默认会读取 Windows 注册表里的系统代理设置**。当时开着代理软件，请求被导到境外节点，而百炼是国内服务，TLS 就在中间层被中断。
+
+  修复：`httpx.Client(trust_env=False)`，让请求忽略系统代理和环境变量代理。同时加了重试（对连接类错误退避 1s/2s/4s），并把错误信息换成人话——原来的 `Connection error.` 完全没法排查。
+
+  **这个 bug 教会我的**：报错信息「连接失败」其实包含了四五种完全不同的故障。把它逐层拆开（DNS → TCP → TLS → 应用层），每一步都有独立结论，比反复猜快得多。
 
 ## 已知的限制
 
@@ -229,6 +251,49 @@ python -m streamlit run app.py
 这也适用于任何「装了但命令找不到」的 Python 工具——`python -m 模块名` 永远能绕开 PATH 问题。
 
 > 微软商店版的 Python（路径里带 `PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0`）一定会碰到这个，因为它的 Scripts 目录默认不在 PATH 里。不影响使用。
+
+### 8. 报 `Connection error.` 或 `UNEXPECTED_EOF_WHILE_READING`（踩过，已修）
+
+**症状**：点「开始分析」后报 `分析失败：Connection error.`，或者直接跑脚本时看到：
+
+```
+SSL: UNEXPECTED_EOF_WHILE_READING EOF occurred in violation of protocol
+```
+
+**原因**：`httpx`（openai 库底层）**默认会读取 Windows 注册表里的系统代理**。如果你开着 VPN / 代理 / 网络加速器（Clash、v2rayN、UU 加速器、迅游等），请求会被导到境外节点——而百炼是**国内服务**，TLS 就在中间层被掐断了。
+
+**典型特征是「DNS 通、TCP 通、但 HTTPS 失败」**：
+
+```
+DNS 解析 : ✓ dashscope.aliyuncs.com -> 8.140.217.18
+TCP 连接 : ✓ 443 可连接
+HTTPS    : ✗ SSL: UNEXPECTED_EOF_WHILE_READING
+```
+
+**代码已经处理了这个问题**：`get_client()` 里用 `httpx.Client(trust_env=False)`，让请求**忽略系统代理和环境变量代理**，直接连。
+
+所以正常情况下**你不需要关代理**。
+
+**如果确实需要走代理**（比如公司网络必须经代理出网），在 `.env` 里改：
+
+```
+LLM_USE_PROXY=1
+```
+
+**诊断工具**：项目里有两个脚本可以直接定位这类问题：
+
+```powershell
+python check_network.py   # 分层测试：代理配置 → TLS 握手 → 带/不带 key 的请求
+python check_api.py       # 检查 .env 配置 + 鉴权 + 真正调用一次模型
+```
+
+两个脚本都**不会打印你的完整 key**（只显示前 12 位和长度），输出可以直接发给别人看。
+
+### 9. 连接类错误会自动重试
+
+`analyze_image()` 对「连不上 / 超时 / 被限流」这几类错误会自动重试 3 次，退避 1s → 2s → 4s。
+
+重试用完仍失败，会抛出带排查指引的错误信息，而不是一句干巴巴的 `Connection error.`。
 
 ## License
 
