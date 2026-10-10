@@ -102,6 +102,7 @@ daily-diet/
 ├── analyzer.py                     # 核心逻辑：压缩图片 → 调模型 → 解析 JSON
 ├── test_analyzer.py                # 单元测试（不需要联网、不需要 API Key）
 ├── set_key.py                      # 安全更新 .env 里的 key（带格式校验）
+├── make_secrets.py                 # 从 .env 生成 Secrets 的 TOML 并复制到剪贴板
 ├── check_api.py                    # 诊断：配置 + 鉴权 + 实际调用一次模型
 ├── check_network.py                # 诊断：代理配置 → TLS 握手 → 请求分层测试
 ├── requirements.txt
